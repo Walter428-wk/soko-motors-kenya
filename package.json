@@ -1,0 +1,22 @@
+{
+  "name": "soko-motors-kenya",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace api\" \"npm run dev --workspace web\"",
+    "build": "npm run build --workspace web",
+    "start": "concurrently \"npm run start --workspace api\" \"npm run start --workspace web\"",
+    "seed": "npm run seed --workspace api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "mongodb": "^7.1.1"
+  }
+}
