@@ -5,10 +5,11 @@ import { useEffect, useState } from "react";
 
 import { useSession } from "@/components/app-shell";
 import { EmptyState, ListingCard, MetricCard, PlanCard, SectionHeading, StatusBadge } from "@/components/ui";
-import { apiFetch, formatCurrency, formatNumber } from "@/lib/api";
+import { apiFetch, formatNumber } from "@/lib/api";
 
 export default function DashboardPage() {
   const { ready, refreshSession, session } = useSession();
+  const [mpesaPhone, setMpesaPhone] = useState("");
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -17,9 +18,9 @@ export default function DashboardPage() {
   const [verificationForm, setVerificationForm] = useState({
     idNumber: "",
     documentName: "",
-    companyName: session?.user?.dealerProfile?.companyName || "",
-    companyLocation: session?.user?.dealerProfile?.companyLocation || "",
-    yearsInBusiness: session?.user?.dealerProfile?.yearsInBusiness || ""
+    companyName: "",
+    companyLocation: "",
+    yearsInBusiness: ""
   });
 
   const loadDashboard = async () => {
@@ -40,13 +41,16 @@ export default function DashboardPage() {
   }, [session?.token]);
 
   useEffect(() => {
+    if (session?.user?.phone && !mpesaPhone) {
+      setMpesaPhone(session.user.phone);
+    }
     setVerificationForm((current) => ({
       ...current,
       companyName: session?.user?.dealerProfile?.companyName || current.companyName,
       companyLocation: session?.user?.dealerProfile?.companyLocation || current.companyLocation,
       yearsInBusiness: session?.user?.dealerProfile?.yearsInBusiness || current.yearsInBusiness
     }));
-  }, [session?.user?.dealerProfile?.companyLocation, session?.user?.dealerProfile?.companyName, session?.user?.dealerProfile?.yearsInBusiness]);
+  }, [session?.user]);
 
   const runAction = async (key, request) => {
     if (!session?.token) return;
@@ -126,7 +130,9 @@ export default function DashboardPage() {
           </div>
 
           <div className="mt-12 grid gap-8 lg:grid-cols-[1fr_0.9fr]">
+            {/* LEFT SECTION */}
             <section className="space-y-8">
+              {/* Inventory */}
               <div className="panel rounded-4xl p-8">
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <div>
@@ -135,12 +141,9 @@ export default function DashboardPage() {
                   </div>
                   <div className="flex flex-wrap gap-3 text-sm font-semibold">
                     <span className="rounded-full bg-sand px-3 py-1">Plan: {dashboard.user.subscription?.planId || "starter"}</span>
-                    <span className="rounded-full bg-sand px-3 py-1">
-                      Feature credits: {dashboard.user.subscription?.featuredCredits || 0}
-                    </span>
+                    <span className="rounded-full bg-sand px-3 py-1">Feature credits: {dashboard.user.subscription?.featuredCredits || 0}</span>
                   </div>
                 </div>
-
                 <div className="mt-8 grid gap-6 xl:grid-cols-2">
                   {dashboard.listings.length > 0 ? (
                     dashboard.listings.map((listing) => (
@@ -152,12 +155,14 @@ export default function DashboardPage() {
                             disabled={busyAction === `feature-${listing._id}`}
                             onClick={() =>
                               runAction(`feature-${listing._id}`, {
-                                path: `/api/listings/${listing._id}/feature`
+                                path: `/api/payments/mpesa/feature/${listing._id}`,
+                                method: "POST",
+                                body: { phone: mpesaPhone }
                               })
                             }
                             type="button"
                           >
-                            Feature Listing
+                            Feature Listing (KES 500)
                           </button>
                           <button
                             className="button-secondary px-4 py-2"
@@ -191,6 +196,7 @@ export default function DashboardPage() {
                 </div>
               </div>
 
+              {/* Saved cars */}
               <div className="panel rounded-4xl p-8">
                 <p className="text-sm font-bold uppercase tracking-[0.24em] text-moss">Saved cars</p>
                 <h2 className="mt-3 text-3xl font-black text-ink">Favorites and buyer-side trust loop</h2>
@@ -206,7 +212,9 @@ export default function DashboardPage() {
               </div>
             </section>
 
+            {/* RIGHT SIDEBAR */}
             <aside className="space-y-8">
+              {/* Verification */}
               <div className="panel rounded-4xl p-8">
                 <p className="text-sm font-bold uppercase tracking-[0.24em] text-moss">Verification</p>
                 <h2 className="mt-3 text-3xl font-black text-ink">Earn the badge buyers trust</h2>
@@ -216,7 +224,6 @@ export default function DashboardPage() {
                     <span className="rounded-full bg-ink px-3 py-1 text-xs font-bold text-white">Verified account</span>
                   ) : null}
                 </div>
-
                 <div className="mt-6 space-y-4">
                   <input
                     className="field"
@@ -234,17 +241,13 @@ export default function DashboardPage() {
                     <>
                       <input
                         className="field"
-                        onChange={(event) =>
-                          setVerificationForm((current) => ({ ...current, companyName: event.target.value }))
-                        }
+                        onChange={(event) => setVerificationForm((current) => ({ ...current, companyName: event.target.value }))}
                         placeholder="Dealer company name"
                         value={verificationForm.companyName}
                       />
                       <input
                         className="field"
-                        onChange={(event) =>
-                          setVerificationForm((current) => ({ ...current, companyLocation: event.target.value }))
-                        }
+                        onChange={(event) => setVerificationForm((current) => ({ ...current, companyLocation: event.target.value }))}
                         placeholder="Dealer company location"
                         value={verificationForm.companyLocation}
                       />
@@ -267,28 +270,42 @@ export default function DashboardPage() {
                 </div>
               </div>
 
+              {/* Monetization */}
               <div className="panel rounded-4xl p-8">
                 <p className="text-sm font-bold uppercase tracking-[0.24em] text-moss">Monetization</p>
                 <h2 className="mt-3 text-3xl font-black text-ink">Upgrade subscription</h2>
-                <div className="mt-6 space-y-5">
-                  {dashboard.subscriptionPlans.map((plan) => (
-                    <PlanCard
-                      active={dashboard.user.subscription?.planId === plan.id && dashboard.user.subscription?.status === "active"}
-                      disabled={busyAction === `plan-${plan.id}`}
-                      key={plan.id}
-                      onSelect={(planId) =>
-                        runAction(`plan-${planId}`, {
-                          path: "/api/users/me/subscription",
-                          method: "PATCH",
-                          body: { planId }
-                        })
-                      }
-                      plan={plan}
+                <div className="mt-6 space-y-4">
+                  <div>
+                    <label className="mb-2 block text-sm font-semibold text-slate">M-Pesa Phone Number</label>
+                    <input
+                      style={{ width: "100%", padding: "10px", border: "1px solid #ccc", borderRadius: "8px", fontSize: "14px" }}
+                      onChange={(e) => setMpesaPhone(e.target.value)}
+                      placeholder="e.g. 0712345678"
+                      value={mpesaPhone}
+                      type="tel"
                     />
-                  ))}
+                  </div>
+                  <div className="space-y-4">
+                    {dashboard.subscriptionPlans.map((plan) => (
+                      <PlanCard
+                        active={dashboard.user.subscription?.planId === plan.id && dashboard.user.subscription?.status === "active"}
+                        disabled={busyAction === `plan-${plan.id}`}
+                        key={plan.id}
+                        onSelect={(planId) =>
+                          runAction(`plan-${planId}`, {
+                            path: "/api/payments/mpesa/subscribe",
+                            method: "POST",
+                            body: { planId, phone: mpesaPhone }
+                          })
+                        }
+                        plan={plan}
+                      />
+                    ))}
+                  </div>
                 </div>
               </div>
 
+              {/* Lead inbox */}
               <div className="panel rounded-4xl p-8">
                 <p className="text-sm font-bold uppercase tracking-[0.24em] text-moss">Lead inbox</p>
                 <h2 className="mt-3 text-3xl font-black text-ink">Recent buyer intent</h2>

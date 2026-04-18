@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useSession } from "@/components/app-shell";
 import { EmptyState, SectionHeading } from "@/components/ui";
@@ -22,7 +22,7 @@ const initialForm = {
   importStatus: "Imported",
   hirePurchaseAvailable: false,
   description: "",
-  imageText: ""
+  images: []
 };
 
 export default function SellPage() {
@@ -31,14 +31,62 @@ export default function SellPage() {
   const [form, setForm] = useState(initialForm);
   const [options, setOptions] = useState(marketplaceDefaults);
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     apiFetch("/api/listings/meta")
       .then((data) => setOptions(data))
       .catch(() => setOptions(marketplaceDefaults));
   }, []);
+
+  const handleImageUpload = async (event) => {
+    const files = Array.from(event.target.files);
+    if (!files.length) return;
+
+    if (form.images.length + files.length > 10) {
+      setError("Maximum 10 images allowed.");
+      return;
+    }
+
+    setUploading(true);
+    setError("");
+
+    try {
+      const formData = new FormData();
+      files.forEach((file) => formData.append("images", file));
+
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000"}/api/upload`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.token}`
+        },
+        body: formData
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Upload failed.");
+
+      setForm((current) => ({
+        ...current,
+        images: [...current.images, ...data.urls]
+      }));
+    } catch (uploadError) {
+      setError(uploadError.message);
+    } finally {
+      setUploading(false);
+      event.target.value = "";
+    }
+  };
+
+  const removeImage = (index) => {
+    setForm((current) => ({
+      ...current,
+      images: current.images.filter((_, i) => i !== index)
+    }));
+  };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -55,13 +103,7 @@ export default function SellPage() {
       await apiFetch("/api/listings", {
         method: "POST",
         token: session.token,
-        body: {
-          ...form,
-          images: form.imageText
-            .split("\n")
-            .map((entry) => entry.trim())
-            .filter(Boolean)
-        }
+        body: { ...form }
       });
 
       setMessage("Listing submitted successfully. The admin queue will now review it.");
@@ -138,9 +180,7 @@ export default function SellPage() {
               >
                 <option value="">Select make</option>
                 {options.makes.map((make) => (
-                  <option key={make} value={make}>
-                    {make}
-                  </option>
+                  <option key={make} value={make}>{make}</option>
                 ))}
               </select>
             </div>
@@ -160,9 +200,7 @@ export default function SellPage() {
                   value={form[key]}
                 >
                   {values.map((entry) => (
-                    <option key={entry} value={entry}>
-                      {entry}
-                    </option>
+                    <option key={entry} value={entry}>{entry}</option>
                   ))}
                 </select>
               </div>
@@ -192,21 +230,100 @@ export default function SellPage() {
               />
             </div>
 
+            {/* IMAGE UPLOAD */}
             <div className="md:col-span-2">
-              <label className="mb-2 block text-sm font-semibold text-slate">Image URLs</label>
-              <textarea
-                className="field min-h-36"
-                onChange={(event) => setForm((current) => ({ ...current, imageText: event.target.value }))}
-                placeholder="Paste one image URL per line"
-                value={form.imageText}
-              />
+              <label className="mb-2 block text-sm font-semibold text-slate">
+                Car Photos ({form.images.length}/10)
+              </label>
+
+              {/* Upload button */}
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                style={{
+                  border: "2px dashed #ccc",
+                  borderRadius: "12px",
+                  padding: "24px",
+                  textAlign: "center",
+                  cursor: "pointer",
+                  backgroundColor: uploading ? "#f5f5f5" : "white"
+                }}
+              >
+                <input
+                  accept="image/*"
+                  multiple
+                  onChange={handleImageUpload}
+                  ref={fileInputRef}
+                  style={{ display: "none" }}
+                  type="file"
+                />
+                {uploading ? (
+                  <p style={{ color: "#666", fontSize: "14px" }}>Uploading photos...</p>
+                ) : (
+                  <>
+                    <p style={{ fontSize: "24px" }}>📷</p>
+                    <p style={{ fontWeight: "600", marginTop: "8px" }}>Click to upload photos</p>
+                    <p style={{ color: "#888", fontSize: "13px", marginTop: "4px" }}>
+                      JPG, PNG, WEBP up to 5MB each — max 10 photos
+                    </p>
+                  </>
+                )}
+              </div>
+
+              {/* Image previews */}
+              {form.images.length > 0 && (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "8px", marginTop: "12px" }}>
+                  {form.images.map((url, index) => (
+                    <div key={index} style={{ position: "relative" }}>
+                      <img
+                        src={url}
+                        alt={`Car photo ${index + 1}`}
+                        style={{ width: "100%", height: "100px", objectFit: "cover", borderRadius: "8px" }}
+                      />
+                      <button
+                        onClick={() => removeImage(index)}
+                        type="button"
+                        style={{
+                          position: "absolute",
+                          top: "4px",
+                          right: "4px",
+                          background: "red",
+                          color: "white",
+                          border: "none",
+                          borderRadius: "50%",
+                          width: "22px",
+                          height: "22px",
+                          cursor: "pointer",
+                          fontSize: "12px",
+                          fontWeight: "bold"
+                        }}
+                      >
+                        ×
+                      </button>
+                      {index === 0 && (
+                        <span style={{
+                          position: "absolute",
+                          bottom: "4px",
+                          left: "4px",
+                          background: "rgba(0,0,0,0.6)",
+                          color: "white",
+                          fontSize: "10px",
+                          padding: "2px 6px",
+                          borderRadius: "4px"
+                        }}>
+                          Cover
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
           {error ? <div className="mt-6 rounded-3xl bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">{error}</div> : null}
           {message ? <div className="mt-6 rounded-3xl bg-moss/10 px-4 py-3 text-sm font-semibold text-moss">{message}</div> : null}
 
-          <button className="button-primary mt-8 w-full px-6 py-3" disabled={loading} type="submit">
+          <button className="button-primary mt-8 w-full px-6 py-3" disabled={loading || uploading} type="submit">
             {loading ? "Submitting..." : "Submit Listing"}
           </button>
         </form>
@@ -219,7 +336,6 @@ export default function SellPage() {
               New listings enter an admin approval queue by default, then become eligible for featured boosts and pricing insight once published.
             </p>
           </div>
-
           <div className="rounded-4xl bg-white p-8 shadow-card">
             <h3 className="text-2xl font-black text-ink">What buyers see immediately</h3>
             <div className="mt-5 space-y-3 text-sm text-slate">

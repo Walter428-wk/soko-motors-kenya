@@ -2,7 +2,22 @@ const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const morgan = require("morgan");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
+const { upload, uploadToCloudinary } = require("./upload");
 
+const app = express();
+app.use(helmet());
+
+app.use(
+  rateLimit({
+    max: 10000,
+    windowMs: 15 * 60 * 1000,
+    message: "Too many requests from this IP"
+  })
+);
+
+const { stkPush } = require("./mpesa");
 const { SUBSCRIPTION_PLANS } = require("./config");
 const { Favorite, Lead, Listing, MarketPrice, Report, User } = require("./models");
 const {
@@ -19,7 +34,6 @@ const {
   updateSellerMetrics
 } = require("./services");
 
-const app = express();
 
 app.use(
   cors({
@@ -169,9 +183,10 @@ app.post(
   "/api/auth/login",
   catchAsync(async (req, res) => {
     const { email, password } = req.body;
+    constAppError = require("./utils/AppError");
 
     if (!email || !password) {
-      return res.status(400).json({ message: "Email and password are required." });
+      throw new AppError("Email and password are required.", 400);
     }
 
     const user = await User.findOne({ email: email.toLowerCase() });
@@ -577,6 +592,20 @@ app.post(
   protect,
   catchAsync(async (req, res) => {
     const listing = await Listing.findById(req.params.id);
+//validation check
+//Trigger Mpesa STK push
+const result = await stkPush({
+  phone: req.user.phone, // Ensure you have the user's phone
+  amount: 500,
+  accountRef: `FEAT-${listing._id}`, // This links payment to listing
+  description: `Boost listing: ${listing.title}`
+});
+
+res.json({ 
+  message: "STK push sent. Check your phone.",
+  checkoutRequestId: result.CheckoutRequestID 
+});
+
 
     if (!listing) {
       return res.status(404).json({ message: "Listing not found." });
@@ -903,13 +932,173 @@ app.patch(
     });
   })
 );
+// M-Pesa STK Push — subscription
+app.post(
+  "/api/payments/mpesa/subscribe",
+  protect,
+  catchAsync(async (req, res) => {
+    const { planId, phone } = req.body;
 
-app.use((error, _req, res, _next) => {
-  const statusCode = error.name === "JsonWebTokenError" ? 401 : error.statusCode || 500;
-  return res.status(statusCode).json({
-    message: error.message || "Something went wrong.",
-    stack: process.env.NODE_ENV === "production" ? undefined : error.stack
-  });
+    if (!phone) {
+      return res.status(400).json({ message: "Phone number is required." });
+    }
+
+    const plan = getPlanById(planId);
+    if (!plan) {
+      return res.status(400).json({ message: "Invalid plan selected." });
+    }
+
+    const result = await stkPush({
+      phone,
+      amount: plan.priceMonthly,
+      accountRef: `SUB-${req.user._id}`,
+      description: `Soko Motors ${plan.name} subscription`
+    });
+
+    return res.json({
+      message: "STK push sent. Check your phone to complete payment.",
+      checkoutRequestId: result.CheckoutRequestID
+    });
+  })
+);
+
+// M-Pesa STK Push — featured listing
+app.post(
+  "/api/payments/mpesa/feature/:listingId",
+  protect,
+  catchAsync(async (req, res) => {
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ message: "Phone number is required." });
+    }
+
+    const listing = await Listing.findById(req.params.listingId);
+    if (!listing) {
+      return res.status(404).json({ message: "Listing not found." });
+    }
+
+    const result = await stkPush({
+      phone,
+      amount: 500, // KES 500 to feature a listing
+      accountRef: `FEAT-${listing._id}`,
+      description: `Feature listing: ${listing.title}`
+    });
+
+    return res.json({
+      message: "STK push sent. Check your phone to complete payment.",
+      checkoutRequestId: result.CheckoutRequestID
+    });
+  })
+);
+
+// M-Pesa callback (called by Safaricom after payment)
+app.post(
+  "/api/payments/mpesa/callback",
+  catchAsync(async (req, res) => {
+    const callbackData = req.body?.Body?.stkCallback;
+
+    if (!callbackData) {
+      return res.status(400).json({ message: "Invalid callback." });
+    }
+
+    const { ResultCode, CheckoutRequestID, CallbackMetadata } = callbackData;
+
+    if (ResultCode === 0) {
+      console.log("M-Pesa payment successful:", CheckoutRequestID);
+      
+      const meta = CallbackMetadata?.Item;
+      const accountRef = meta?.find(i => i.Name === 'BillReferenceNumber')?.Value;
+
+      // 1. Handle Subscription Upgrade
+      if (accountRef?.startsWith("SUB-")) {
+        const userId = accountRef.replace("SUB-", "");
+        const user = await User.findById(userId);
+        if (user) {
+          user.subscription = {
+            planId: "growth", 
+            status: "active",
+            startsAt: new Date(),
+            endsAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+          };
+          await user.save();
+        }
+      } 
+      // 2. Handle Featured Listing
+      else if (accountRef?.startsWith("FEAT-")) {
+        const listingId = accountRef.replace("FEAT-", "");
+        await Listing.findByIdAndUpdate(listingId, {
+          "featured.enabled": true,
+          "featured.expiresAt": new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+        });
+      }
+    } else {
+      console.log("M-Pesa payment failed:", callbackData.ResultDesc);
+    }
+
+    return res.status(200).json({ ResultCode: 0, ResultDesc: "Success" });
+  })
+);
+
+app.post(
+  "/api/upload",
+  protect,
+  upload.array("images", 10),
+  catchAsync(async (req, res) => {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ message: "No images uploaded." });
+    }
+    const urls = await Promise.all(
+      req.files.map((file) => uploadToCloudinary(file.buffer))
+    );
+    return res.json({ urls });
+  })
+);
+
+app.use((req, res) => {
+  res.status(404).json({ message: "Route not found" });
 });
 
+app.use((err, _req, res, _next) => {
+  console.error("ERROR 💥:", err);
+
+  // Default
+  let statusCode = err.statusCode || 500;
+  let message = err.message || "Internal server error";
+
+  // JWT errors
+  if (err.name === "JsonWebTokenError") {
+    statusCode = 401;
+    message = "Invalid token.";
+  }
+
+  if (err.name === "TokenExpiredError") {
+    statusCode = 401;
+    message = "Token expired.";
+  }
+
+  // Mongoose errors
+  if (err.name === "CastError") {
+    statusCode = 400;
+    message = `Invalid ${err.path}`;
+  }
+
+  if (err.code === 11000) {
+    statusCode = 400;
+    message = "Duplicate field value.";
+  }
+
+  if (err.name === "ValidationError") {
+    statusCode = 400;
+    message = Object.values(err.errors)
+      .map((el) => el.message)
+      .join(", ");
+  }
+
+  res.status(statusCode).json({
+    status: "error",
+    message,
+    ...(process.env.NODE_ENV !== "production" && { stack: err.stack })
+  });
+});
 module.exports = app;
